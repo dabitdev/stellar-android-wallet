@@ -2,8 +2,6 @@ package com.blockeq.stellarwallet.fragments.tabs
 
 import android.content.Context
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.support.v4.app.Fragment
 import android.support.v4.widget.SwipeRefreshLayout
 import android.support.v7.widget.DividerItemDecoration
@@ -13,10 +11,13 @@ import android.view.View
 import android.view.ViewGroup
 import com.blockeq.stellarwallet.R
 import com.blockeq.stellarwallet.adapters.OrderBooksAdapter
+import com.blockeq.stellarwallet.interfaces.OnRefreshOrderBookListener
 import com.blockeq.stellarwallet.interfaces.OnUpdateOrderBook
 import com.blockeq.stellarwallet.models.*
 import com.brandongogetap.stickyheaders.StickyLayoutManager
 import kotlinx.android.synthetic.main.fragment_tab_order_book.*
+import kotlinx.android.synthetic.main.fragment_wallet.*
+import org.jetbrains.anko.support.v4.runOnUiThread
 import org.stellar.sdk.responses.OrderBookResponse
 import timber.log.Timber
 import java.util.*
@@ -24,9 +25,11 @@ import java.util.*
 class OrderBookTabFragment : Fragment(), SwipeRefreshLayout.OnRefreshListener, OnUpdateOrderBook {
     private var orderBooks = mutableListOf<OrderBook>()
     private lateinit var orderBooksAdapter: OrderBooksAdapter
+    private lateinit var parentListener: OnRefreshOrderBookListener
     private var buyingAsset : DataAsset? = null
     private var sellingAsset : DataAsset? = null
-
+    private var buyingCode : String? = null
+    private var sellingCode : String? = null
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         return inflater.inflate(R.layout.fragment_tab_order_book, container, false)
     }
@@ -36,6 +39,10 @@ class OrderBookTabFragment : Fragment(), SwipeRefreshLayout.OnRefreshListener, O
         val dividerItemDecoration = DividerItemDecoration(context,
                 LinearLayoutManager(context).orientation)
         orderBookRv.addItemDecoration(dividerItemDecoration)
+        orderBooksAdapter = OrderBooksAdapter(view.context)
+        val layout = StickyLayoutManager(context, orderBooksAdapter)
+        orderBookRv.adapter = orderBooksAdapter
+        orderBookRv.layoutManager = layout
         swipeRefresh.setOnRefreshListener(this)
 
     }
@@ -43,11 +50,9 @@ class OrderBookTabFragment : Fragment(), SwipeRefreshLayout.OnRefreshListener, O
     override fun setUserVisibleHint(isVisibleToUser: Boolean) {
         super.setUserVisibleHint(isVisibleToUser)
         Timber.d("setUserVisibleHint %s", isVisibleToUser)
-        if (isVisibleToUser && orderBookRv != null && buyingAsset != null && sellingAsset != null) {
-            updateList(buyingAsset!!.code, sellingAsset!!.code)
+        if (isVisibleToUser && orderBookRv != null && buyingCode != null && sellingCode != null) {
+            updateList(orderBooks, sellingCode!!, buyingCode!!)
             Timber.d("setUserVisibleHint > Refreshing")
-            onRefresh()
-
         }
     }
 
@@ -60,17 +65,22 @@ class OrderBookTabFragment : Fragment(), SwipeRefreshLayout.OnRefreshListener, O
         }
     }
 
+    override fun onAttach(context: Context?) {
+        super.onAttach(context)
+        try {
+            parentListener = parentFragment as OnRefreshOrderBookListener
+        } catch (e: ClassCastException) {
+            Timber.e("the parent must implement: %s", OnRefreshOrderBookListener::class.java.simpleName)
+        }
+    }
+
     override fun onRefresh() {
         if (!isAdded || isDetached || !isVisible) {
-            Timber.d("onRefresh failed fragment not ready")
+            Timber.d("onRefreshOrderBook failed fragment not ready")
             return
         }
 
-        Timber.d("buyingAsset %s sellingAsset %s", buyingAsset, sellingAsset)
-
-        if (buyingAsset != null && sellingAsset != null) {
-//            loadOrderBook(buyingAsset!!, sellingAsset!!)
-        }
+        parentListener.onRefreshOrderBook()
     }
 
     private fun loadOrderBook(sellingCode: String, buyingCode: String, asks: Array<OrderBookResponse.Row>, bids: Array<OrderBookResponse.Row>) {
@@ -108,12 +118,14 @@ class OrderBookTabFragment : Fragment(), SwipeRefreshLayout.OnRefreshListener, O
             orderBooks.add(OrderBook(type = OrderBookAdapterTypes.EMPTY))
         }
 
+
         Timber.d("loading order book complete items %s", orderBooks.size)
 
-        Handler(Looper.getMainLooper()).post {
-            initializeAdapterIfNeeded(sellingCode, buyingCode)
-            orderBooksAdapter.setCurrencies(sellingCode, buyingCode)
-            orderBooksAdapter.notifyDataSetChanged()
+        if (empty_view_order_book != null) {
+            runOnUiThread {
+                updateList(orderBooks, sellingCode, buyingCode)
+                empty_view_order_book.visibility = View.GONE
+            }
         }
 
         if (swipeRefresh != null) {
@@ -128,27 +140,34 @@ class OrderBookTabFragment : Fragment(), SwipeRefreshLayout.OnRefreshListener, O
         buyingAsset = buying
         sellingAsset = selling
 
-        Timber.d("Updating objects in order book")
-        updateList(sellingAsset!!.code, buyingAsset!!.code)
-    }
-
-    private fun initializeAdapterIfNeeded(sellingCode: String, buyingCode: String) : Boolean {
-        if (!::orderBooksAdapter.isInitialized && context != null) {
-            orderBooksAdapter = OrderBooksAdapter(orderBooks, sellingCode, buyingCode, context as Context)
-            orderBookRv.adapter = orderBooksAdapter
-
-            val layout = StickyLayoutManager(context, orderBooksAdapter)
-            orderBookRv.layoutManager = layout
-            return true
+        orderBooks.clear()
+        if (orderBookRv != null) {
+            orderBookRv.visibility = View.GONE
         }
-        return false
+
+//        Timber.d("Updating objects in order book")
+//        updateList(orderBooks, sellingAsset!!.code, buyingAsset!!.code)
     }
 
-    private fun updateList(sellingCode: String, buyingCode: String) {
-        initializeAdapterIfNeeded(sellingCode, buyingCode)
-        Timber.d("updateTradingCurrencies %s %s", buyingCode, sellingCode)
-        orderBooksAdapter.setCurrencies(sellingCode, buyingCode)
-        orderBooksAdapter.notifyDataSetChanged()
+    override fun failedToUpdate() {
+        runOnUiThread {
+            if (swipeRefresh != null) {
+                swipeRefresh.isRefreshing = false
+                orderBookRv.visibility = View.GONE
+                empty_view_order_book.visibility = View.VISIBLE
+            }
+        }
+    }
 
+    private fun updateList(list : MutableList<OrderBook>, sellingCode: String, buyingCode: String) {
+        Timber.d("updateTradingCurrencies %s %s", buyingCode, sellingCode)
+        if (orderBookRv != null && list.isNotEmpty()) {
+            orderBookRv.visibility = View.VISIBLE
+            this.buyingCode = buyingCode
+            this.sellingCode = sellingCode
+            orderBooksAdapter.setOrderBookList(list)
+            orderBooksAdapter.setCurrencies(sellingCode, buyingCode)
+            orderBooksAdapter.notifyDataSetChanged()
+        }
     }
 }

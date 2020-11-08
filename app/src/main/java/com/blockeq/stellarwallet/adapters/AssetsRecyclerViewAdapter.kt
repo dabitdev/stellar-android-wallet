@@ -17,6 +17,8 @@ import com.blockeq.stellarwallet.WalletApplication
 import com.blockeq.stellarwallet.activities.InflationActivity
 import com.blockeq.stellarwallet.helpers.Constants
 import com.blockeq.stellarwallet.interfaces.ChangeTrustlineListener
+import com.blockeq.stellarwallet.models.DefaultAsset
+import com.blockeq.stellarwallet.models.SessionAssetImpl
 import com.blockeq.stellarwallet.models.SupportedAsset
 import com.blockeq.stellarwallet.models.SupportedAssetType
 import com.blockeq.stellarwallet.utils.AccountUtils
@@ -24,6 +26,8 @@ import com.blockeq.stellarwallet.utils.StringFormat
 import com.squareup.picasso.Picasso
 import org.stellar.sdk.Asset
 import org.stellar.sdk.KeyPair
+import java.util.*
+import kotlin.collections.ArrayList
 
 class AssetsRecyclerViewAdapter(var context: Context, private var listener: ChangeTrustlineListener, private var items : ArrayList<Any>) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     companion object {
@@ -112,7 +116,7 @@ class AssetsRecyclerViewAdapter(var context: Context, private var listener: Chan
         viewHolder.assetButton.visibility = View.VISIBLE
         viewHolder.assetName.text = asset.name
         viewHolder.assetAmount.text = String.format(context.getString(R.string.balance_template),
-                StringFormat.truncateDecimalPlaces(asset.amount), asset.code.toUpperCase())
+                StringFormat.truncateDecimalPlaces(asset.amount), asset.code.toUpperCase(Locale.getDefault()))
 
         if (asset.image.isNotEmpty()) {
             viewHolder.defaultImage.visibility = View.GONE
@@ -125,6 +129,9 @@ class AssetsRecyclerViewAdapter(var context: Context, private var listener: Chan
         }
 
         if (asset.code == Constants.LUMENS_ASSET_CODE) {
+            //TODO: disabling inflation since in protocol 12 will be removed.
+            viewHolder.assetButton.visibility = View.GONE
+
             viewHolder.assetButton.text = context.getString(R.string.set_inflation_message)
             viewHolder.assetButton.setBackgroundColor(ContextCompat.getColor(context, R.color.mantis))
             viewHolder.assetButton.setOnClickListener {
@@ -147,13 +154,9 @@ class AssetsRecyclerViewAdapter(var context: Context, private var listener: Chan
 
         viewHolder.itemView.setOnClickListener {
             if (asset.code == Constants.LUMENS_ASSET_CODE) {
-                WalletApplication.userSession.currAssetCode = Constants.LUMENS_ASSET_TYPE
-                WalletApplication.userSession.currAssetName = Constants.LUMENS_ASSET_NAME
-                WalletApplication.userSession.currAssetIssuer = ""
+                WalletApplication.userSession.setSessionAsset(DefaultAsset())
             } else {
-                WalletApplication.userSession.currAssetCode = asset.code.toUpperCase()
-                WalletApplication.userSession.currAssetName = asset.name
-                WalletApplication.userSession.currAssetIssuer = asset.issuer
+                WalletApplication.userSession.setSessionAsset(SessionAssetImpl(asset.code.toUpperCase(Locale.getDefault()), asset.name, asset.issuer))
             }
             (context as Activity).finish()
         }
@@ -166,10 +169,10 @@ class AssetsRecyclerViewAdapter(var context: Context, private var listener: Chan
 
     private fun configureSupportedAssetViewHolder(viewHolder: SupportedAssetViewHolder, position: Int) {
         val asset = items[position] as SupportedAsset
-        val trustLineAsset = Asset.createNonNativeAsset(asset.code.toUpperCase(), KeyPair.fromAccountId(asset.issuer))
+        val trustLineAsset = Asset.createNonNativeAsset(asset.code.toUpperCase(Locale.getDefault()), KeyPair.fromAccountId(asset.issuer).accountId)
 
         viewHolder.assetName.text = String.format(context.getString(R.string.asset_template),
-                asset.name, asset.code.toUpperCase())
+                asset.name, asset.code.toUpperCase(Locale.getDefault()))
 
         viewHolder.assetAmount.visibility = View.GONE
         viewHolder.defaultImage.visibility = View.GONE

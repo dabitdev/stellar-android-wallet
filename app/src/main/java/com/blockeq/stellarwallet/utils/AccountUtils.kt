@@ -5,6 +5,7 @@ import com.blockeq.stellarwallet.WalletApplication
 import com.blockeq.stellarwallet.encryption.CipherWrapper
 import com.blockeq.stellarwallet.encryption.KeyStoreWrapper
 import com.blockeq.stellarwallet.helpers.Constants
+import com.blockeq.stellarwallet.mvvm.effects.EffectsRepository
 import com.soneso.stellarmnemonics.Wallet
 import org.stellar.sdk.KeyPair
 
@@ -19,13 +20,13 @@ class AccountUtils {
             val stellarKeyPair = AccountUtils.getStellarKeyPair(mnemonic, passphrase)
 
             WalletApplication.wallet.setStellarAccountId(stellarKeyPair.accountId)
-            WalletApplication.userSession.pin = pin
+            WalletApplication.userSession.setPin(pin)
         }
 
         fun getSecretSeed(context : Context) : CharArray {
             val encryptedPhrase = WalletApplication.wallet.getEncryptedPhrase()!!
             val encryptedPassphrase = WalletApplication.wallet.getEncryptedPassphrase()
-            val masterKey = getPinMasterKey(context, WalletApplication.userSession.pin!!)!!
+            val masterKey = getPinMasterKey(context, WalletApplication.userSession.getPin()!!)!!
 
             val decryptedPhrase = getDecryptedString(encryptedPhrase, masterKey)
 
@@ -88,14 +89,8 @@ class AccountUtils {
         }
 
         fun calculateAvailableBalance(): String {
-            val minimumBalance = WalletApplication.userSession.minimumBalance!!
+            val minimumBalance = WalletApplication.userSession.getMinimumBalance()!!
             return (getTotalBalance(Constants.LUMENS_ASSET_TYPE).toDouble() - minimumBalance.totalAmount).toString()
-        }
-
-        fun wipe(context: Context) : Boolean {
-            val keyStoreWrapper = KeyStoreWrapper(context)
-            keyStoreWrapper.clear()
-            return WalletApplication.wallet.clearLocalStore()
         }
     }
 }

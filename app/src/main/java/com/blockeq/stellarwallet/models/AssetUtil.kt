@@ -1,6 +1,5 @@
 package com.blockeq.stellarwallet.models
 
-import com.blockeq.stellarwallet.remote.Horizon
 import org.stellar.sdk.Asset
 import org.stellar.sdk.AssetTypeCreditAlphaNum12
 import org.stellar.sdk.AssetTypeCreditAlphaNum4
@@ -35,11 +34,11 @@ class AssetUtil {
                 dataAsset = when (assetType) {
                     AssetType.ASSET_TYPE_CREDIT_ALPHANUM12 -> {
                         val concreteAsset = asset as AssetTypeCreditAlphaNum12
-                        DataAsset(concreteAsset.type, concreteAsset.code, concreteAsset.issuer.accountId)
+                        DataAsset(concreteAsset.type, concreteAsset.code, concreteAsset.issuer)
                     }
                     AssetType.ASSET_TYPE_CREDIT_ALPHANUM4 -> {
                         val concreteAsset = asset as AssetTypeCreditAlphaNum4
-                        DataAsset(concreteAsset.type, concreteAsset.code, concreteAsset.issuer.accountId)
+                        DataAsset(concreteAsset.type, concreteAsset.code, concreteAsset.issuer)
                     }
                     AssetType.ASSET_TYPE_NATIVE -> {
                         val concreteAsset = asset as AssetTypeNative

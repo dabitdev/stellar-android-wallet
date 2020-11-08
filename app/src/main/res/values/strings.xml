@@ -34,7 +34,7 @@
     <string name="logoDescription">Block-EQ</string>
     <string name="title_activity_wallets">Wallets</string>
     <string name="title_activity_my_wallet">Wallet</string>
-    <string name="learn_more">Learn more</string>
+    <string name="balance">Balance</string>
     <string name="activity">ACTIVITY</string>
     <string name="amount">AMOUNT</string>
     <string name="no_transactions">You currently have no transactions</string>
@@ -72,7 +72,6 @@
     <string name="view_seed">View Secret Key (Not recommended)</string>
     <string name="wallet">Wallet</string>
     <string name="clear_wallet">Clear Wallet</string>
-    <string name="enable_wear">Enable WearApp</string>
     <string name="security">Security</string>
     <string name="pin_send_payments">Request PIN when sending payments</string>
     <string name="troubleshooting">Troubleshooting</string>
@@ -102,6 +101,8 @@
     <string name="trade_tab_notes">Your market order may not be completely filled depending
         on amount offered. View the order book to see the amount available at the market rate.
         Any amount larger than this will be posed as an offer.</string>
+    <string name="my_offer_empty_list">There are no offers at the moment</string>
+    <string name="order_book_empty_list">Failed to retrieve the order book</string>
 
     <!--My Offers Fragment-->
     <string name="rowDescription">Sell %1$s %2$s for %3$s %4$s at the price of %5$s %6$s/%7$s </string>
@@ -168,17 +169,17 @@
     <string name="inflation_set_success">Inflation destination set!</string>
     <string name="inflation_set_error">There was an error setting inflation destination.</string>
 
-    <!--Balance Summary Activity-->
+    <!--BalanceAvailabilityImpl Summary Activity-->
     <string name="total_balance">Total Balance</string>
     <string name="available_balance">Available Balance</string>
     <string name="type">Type</string>
     <string name="amount_lowercase">Amount</string>
     <string name="xlm">XLM</string>
-    <string name="base_reserve">Base Reserve</string>
+    <string name="base_reserve">Base Amount</string>
     <string name="trustlines">Trustlines</string>
-    <string name="offers">Offers</string>
-    <string name="signers">Signers</string>
-    <string name="minimum_balance">Minimum Balance</string>
+    <string name="offers">Open Offers</string>
+    <string name="signers">Additional signers</string>
+    <string name="traded">Posted for Trade</string>
     <string name="balance_summary">Balance Summary</string>
 
     <!--View Secret Seed Activity-->
@@ -224,7 +225,6 @@
     <string name="asset_code_hint">BTC</string>
     <string name="issuer_address">Issuer Address</string>
     <string name="empty_fields">You have one or more empty fields</string>
-    <string name="my_offer_empty_list">There are no offers at the moment</string>
     <string name="add_asset_title">Add Asset</string>
     <string name="override_limit_order_text">Override limit order</string>
 
@@ -254,7 +254,12 @@
     <string name="create_button">CREATE</string>
     <string name="trade_alert_title">Not enough assets</string>
     <string name="trade_alert_message">You must have at least one Stellar asset in addition to Lumens(XLM) in order to trade.</string>
-    <string name="trade_alert_button">Add asset</string>
+    <string name="trade_alert_positive_button">Add asset</string>
+    <string name="trade_alert_negative_button">Not now</string>
+    <string name="fund_account_string">This account requires activation. Send at least 1 XLM to fund and activate the account</string>
+    <string name="fetching_account_state">Fetching account transactions, please wait</string>
+    <string name="stellarx_banner_message">BlockEQ is now deprecated and will remain available to the open source community; we recommend you export your account to our friends at StellarX!</string>
+    <string name="stellarx_download_action">Download Now</string>
 
 
 </resources>

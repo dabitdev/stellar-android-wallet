@@ -3,7 +3,6 @@ package com.blockeq.stellarwallet.activities
 import android.app.AlertDialog
 import android.app.Dialog
 import android.os.Bundle
-import android.os.Handler
 import android.support.design.widget.BottomNavigationView
 import android.support.v4.app.Fragment
 import android.view.View
@@ -13,19 +12,10 @@ import com.blockeq.stellarwallet.fragments.ContactsFragment
 import com.blockeq.stellarwallet.fragments.SettingsFragment
 import com.blockeq.stellarwallet.fragments.TradingFragment
 import com.blockeq.stellarwallet.fragments.WalletFragment
-import com.blockeq.stellarwallet.interfaces.OnLoadAccount
-import com.blockeq.stellarwallet.interfaces.OnLoadEffects
-import com.blockeq.stellarwallet.models.MinimumBalance
-import com.blockeq.stellarwallet.remote.Horizon
-import com.blockeq.stellarwallet.utils.AccountUtils
 import com.blockeq.stellarwallet.utils.KeyboardUtils
-import com.blockeq.stellarwallet.utils.NetworkUtils
-import org.stellar.sdk.requests.ErrorResponse
-import org.stellar.sdk.responses.AccountResponse
-import org.stellar.sdk.responses.effects.EffectResponse
-import java.util.*
+import timber.log.Timber
 
-class WalletActivity : BaseActivity(), OnLoadAccount, OnLoadEffects, KeyboardUtils.SoftKeyboardToggleListener {
+class WalletActivity : BaseActivity(), KeyboardUtils.SoftKeyboardToggleListener {
     private enum class WalletFragmentType {
         WALLET,
         TRADING,
@@ -35,7 +25,7 @@ class WalletActivity : BaseActivity(), OnLoadAccount, OnLoadEffects, KeyboardUti
 
     private lateinit var dialogTradeAlert : Dialog
     private lateinit var bottomNavigation : BottomNavigationView
-
+    private var currentItemSelected : Int = -1
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_wallet)
@@ -43,7 +33,14 @@ class WalletActivity : BaseActivity(), OnLoadAccount, OnLoadEffects, KeyboardUti
         dialogTradeAlert = createTradingErrorDialog()
 
         setupUI()
+    }
 
+    private fun getReusedFragment(tag:String) : Fragment? {
+       val fragment = supportFragmentManager.findFragmentByTag(tag)
+       if (fragment != null) {
+           Timber.d("reused a cached fragment {$tag}")
+       }
+       return fragment
     }
 
     //region Navigation
@@ -52,8 +49,10 @@ class WalletActivity : BaseActivity(), OnLoadAccount, OnLoadEffects, KeyboardUti
         val builder = AlertDialog.Builder(this)
         builder.setTitle(getString(R.string.trade_alert_title))
         builder.setMessage(getString(R.string.trade_alert_message))
-        builder.setPositiveButton(getString(R.string.trade_alert_button)) { _, _ -> startActivity(AssetsActivity.newInstance(this)) }
+        builder.setPositiveButton(getString(R.string.trade_alert_positive_button)) { _, _ -> startActivity(AssetsActivity.newInstance(this)) }
+        builder.setNegativeButton(getString(R.string.trade_alert_negative_button)) { dialog, _ -> dialog.cancel() }
         val dialog = builder.create()
+
         dialog.setOnCancelListener {
             bottomNavigation.selectedItemId = R.id.nav_wallet
         }
@@ -61,66 +60,71 @@ class WalletActivity : BaseActivity(), OnLoadAccount, OnLoadEffects, KeyboardUti
         return dialog
     }
 
-    private val mOnNavigationItemSelectedListener = BottomNavigationView.OnNavigationItemSelectedListener { item ->
-        when (item.itemId) {
-            R.id.nav_wallet -> {
-                val walletFragment = WalletFragment.newInstance()
-                openFragment(walletFragment, WalletFragmentType.WALLET)
-            }
-            R.id.nav_trading -> {
-                val balances = WalletApplication.wallet.getBalances()
-                if (balances.isEmpty()) {
-                    dialogTradeAlert.show()
+    private val onNavigationItemSelectedListener = BottomNavigationView.OnNavigationItemSelectedListener { item ->
+        //let's ignore item selection in the current item
+        if (currentItemSelected != item.itemId) {
+            currentItemSelected = item.itemId
+            when (item.itemId) {
+                R.id.nav_wallet -> {
+                    val walletFragment = getReusedFragment(WalletFragmentType.WALLET.name)
+                            ?: WalletFragment.newInstance()
+                    replaceFragment(walletFragment, WalletFragmentType.WALLET)
                 }
-                val tradingFragment = TradingFragment.newInstance()
-                openFragment(tradingFragment, WalletFragmentType.TRADING)
+                R.id.nav_trading -> {
+                    // minimum two trades
+                    if (!enoughAssetsToTrade()) {
+                        dialogTradeAlert.show()
+                    }
+                    val tradingFragment = getReusedFragment(WalletFragmentType.TRADING.name)
+                            ?: TradingFragment.newInstance()
+                    replaceFragment(tradingFragment, WalletFragmentType.TRADING)
+                }
+                R.id.nav_contacts -> {
+                    replaceFragment(getReusedFragment(WalletFragmentType.CONTACTS.name)
+                            ?: ContactsFragment(), WalletFragmentType.CONTACTS)
+                }
+                R.id.nav_settings -> {
+                    val settingsFragment = getReusedFragment(WalletFragmentType.SETTING.name)
+                            ?: SettingsFragment.newInstance()
+                    replaceFragment(settingsFragment, WalletFragmentType.SETTING)
+                }
+                else -> throw IllegalAccessException("Navigation item not supported $item.title(${item.itemId})")
             }
-            R.id.nav_contacts -> {
-                openFragment(ContactsFragment(), WalletFragmentType.CONTACTS)
-            }
-            R.id.nav_settings -> {
-                val settingsFragment = SettingsFragment.newInstance()
-                openFragment(settingsFragment, WalletFragmentType.SETTING)
-            }
-            else -> throw IllegalAccessException("Navigation item not supported $item.title(${item.itemId})")
         }
         return@OnNavigationItemSelectedListener true
     }
 
-    private fun openFragment(fragment: Fragment, type : WalletFragmentType) {
+    private fun replaceFragment(fragment: Fragment, type : WalletFragmentType) {
         val transaction = supportFragmentManager.beginTransaction()
         transaction.replace(R.id.content_container, fragment, type.name)
+        //This is complete necessary to be able to reuse the fragments using the supportFragmentManager
+        transaction.addToBackStack(null)
         transaction.commit()
     }
 
     private fun setupUI() {
         bottomNavigation = findViewById(R.id.navigationView)
-        bottomNavigation.setOnNavigationItemSelectedListener(mOnNavigationItemSelectedListener)
+        bottomNavigation.setOnNavigationItemSelectedListener(onNavigationItemSelectedListener)
         bottomNavigation.selectedItemId = R.id.nav_wallet
     }
+
 
     //endregion
 
     override fun onResume() {
         super.onResume()
-        startPollingAccount()
 
         if (bottomNavigation.selectedItemId ==  R.id.nav_trading) {
-            val balances = WalletApplication.wallet.getBalances()
-            if (balances.isEmpty()) {
+            if (!enoughAssetsToTrade()) {
                 dialogTradeAlert.show()
             }
         }
-
         KeyboardUtils.addKeyboardToggleListener(this, this)
     }
 
     override fun onPause() {
         super.onPause()
-        endPollingAccount()
-
         KeyboardUtils.removeKeyboardToggleListener(this)
-
     }
 
     override fun onDestroy() {
@@ -129,6 +133,13 @@ class WalletActivity : BaseActivity(), OnLoadAccount, OnLoadEffects, KeyboardUti
             dialogTradeAlert.dismiss()
         }
     }
+
+    private fun enoughAssetsToTrade() : Boolean {
+        val balances = WalletApplication.wallet.getBalances()
+        //minimum 2 assets to trade
+        return balances.size > 1
+    }
+
     /**
      * When the keyboard is opened the bottomNavigation gets pushed up.
      */
@@ -140,62 +151,11 @@ class WalletActivity : BaseActivity(), OnLoadAccount, OnLoadEffects, KeyboardUti
         }
     }
 
-    private var handler = Handler()
-    private var runnableCode : Runnable? = null
-
-    //TODO polling for only non-created accounts on Stellar.
-    private fun startPollingAccount() {
-        runnableCode = object : Runnable {
-            override fun run() {
-
-                if (NetworkUtils(applicationContext).isNetworkAvailable()) {
-
-                    Horizon.getLoadAccountTask(this@WalletActivity)
-                            .execute()
-
-                    Horizon.getLoadEffectsTask(this@WalletActivity)
-                            .execute()
-                } else {
-                    NetworkUtils(applicationContext).displayNoNetwork()
-                }
-
-                handler.postDelayed(this, 5000)
-            }
-        }
-
-        handler.post(runnableCode)
-    }
-
-    private fun endPollingAccount() {
-        handler.removeCallbacks(runnableCode)
-    }
-
-    override fun onLoadAccount(result: AccountResponse?) {
-        if (result != null) {
-            WalletApplication.wallet.setBalances(result.balances)
-            WalletApplication.userSession.minimumBalance = MinimumBalance(result)
-            WalletApplication.wallet.setAvailableBalance(AccountUtils.calculateAvailableBalance())
-
-            bottomNavigation.menu.getItem(WalletFragmentType.TRADING.ordinal).isEnabled = true
-        }
-
-        val fragment = supportFragmentManager.findFragmentByTag(WalletFragmentType.WALLET.name)
-        if (fragment != null) {
-            (fragment as WalletFragment).onLoadAccount(result)
-        }
-    }
-
-    override fun onError(error: ErrorResponse) {
-        val fragment = supportFragmentManager.findFragmentByTag(WalletFragmentType.WALLET.name)
-        if (fragment != null) {
-            (fragment as WalletFragment).onError(error)
-        }
-    }
-
-    override fun onLoadEffects(result: ArrayList<EffectResponse>?) {
-        val fragment = supportFragmentManager.findFragmentByTag(WalletFragmentType.WALLET.name)
-        if (fragment != null) {
-            (fragment as WalletFragment).onLoadEffects(result)
+    override fun onBackPressed() {
+        if (bottomNavigation.selectedItemId != R.id.nav_wallet) {
+            bottomNavigation.selectedItemId = R.id.nav_wallet
+        } else {
+           finish()
         }
     }
 }

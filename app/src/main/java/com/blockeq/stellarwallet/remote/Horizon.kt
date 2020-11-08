@@ -6,31 +6,47 @@ import android.os.Looper
 import com.blockeq.stellarwallet.WalletApplication
 import com.blockeq.stellarwallet.helpers.Constants
 import com.blockeq.stellarwallet.interfaces.OnLoadAccount
-import com.blockeq.stellarwallet.interfaces.OnLoadEffects
 import com.blockeq.stellarwallet.interfaces.SuccessErrorCallback
 import com.blockeq.stellarwallet.models.AssetUtil
 import com.blockeq.stellarwallet.models.DataAsset
 import com.blockeq.stellarwallet.models.HorizonException
-import com.facebook.stetho.okhttp3.StethoInterceptor
-import okhttp3.OkHttpClient
+import com.blockeq.stellarwallet.mvvm.effects.remote.OnLoadEffects
 import org.stellar.sdk.*
-import org.stellar.sdk.requests.ErrorResponse
-import org.stellar.sdk.requests.RequestBuilder
+import org.stellar.sdk.Transaction.Builder.TIMEOUT_INFINITE
+import org.stellar.sdk.requests.*
 import org.stellar.sdk.responses.AccountResponse
 import org.stellar.sdk.responses.OfferResponse
 import org.stellar.sdk.responses.OrderBookResponse
 import org.stellar.sdk.responses.Page
 import org.stellar.sdk.responses.effects.EffectResponse
+import shadow.okhttp3.OkHttpClient
 import timber.log.Timber
 import java.util.concurrent.TimeUnit
 
 object Horizon : HorizonTasks {
-    private const val PROD_SERVER = "https://horizon.stellar.org"
-    private const val TEST_SERVER = "https://horizon-testnet.stellar.org"
-    private const val SERVER_ERROR_MESSAGE = "Error response from the server."
+    private lateinit var HORIZON_SERVER : Server
+    private lateinit var serverNetwork : Network
+    override fun init(server: ServerType) {
+        var serverAddress = ""
+        when(server) {
+           ServerType.PROD -> {
+               serverAddress = "https://horizon.stellar.org"
+               serverNetwork = Network.PUBLIC
+           }
+           ServerType.TEST_NET -> {
+               serverAddress = "https://horizon-testnet.stellar.org"
+               serverNetwork = Network.TESTNET
+           }
+       }
+        HORIZON_SERVER = createServer(serverAddress)
+    }
 
-    override fun getLoadEffectsTask(listener: OnLoadEffects): AsyncTask<Void, Void, ArrayList<EffectResponse>?> {
-        return LoadEffectsTask(listener)
+    public fun getServerNetwork():Network {
+        return serverNetwork
+    }
+
+    override fun getLoadEffectsTask(cursor: String, limit: Int, listener: OnLoadEffects): AsyncTask<Void, Void, ArrayList<EffectResponse>?> {
+        return LoadEffectsTask(cursor, limit, listener)
     }
 
     override fun getSendTask(listener: SuccessErrorCallback, destAddress: String, secretSeed: CharArray, memo: String, amount: String): AsyncTask<Void, Void, HorizonException> {
@@ -52,13 +68,13 @@ object Horizon : HorizonTasks {
     override fun deleteOffer(id:Long, secretSeed : CharArray, selling: Asset, buying: Asset, price: String, listener: Horizon.OnMarketOfferListener) {
         AsyncTask.execute {
             val server = getServer()
-            val offerOperation = ManageOfferOperation.Builder(selling, buying, "0", price).setOfferId(id).build()
+            val offerOperation = ManageSellOfferOperation.Builder(selling, buying, "0", price).setOfferId(id).build()
             val sourceKeyPair = KeyPair.fromSecretSeed(secretSeed)
 
             try {
-                val sourceAccount = server.accounts().account(sourceKeyPair)
+                val sourceAccount = server.accounts().account(sourceKeyPair.accountId)
 
-                val transaction = Transaction.Builder(sourceAccount).addOperation(offerOperation).build()
+                val transaction = Transaction.Builder(sourceAccount, getServerNetwork()).setTimeout(TIMEOUT_INFINITE).addOperation(offerOperation).build()
                 transaction.sign(sourceKeyPair)
                 val response = server.submitTransaction(transaction)
 
@@ -66,7 +82,12 @@ object Horizon : HorizonTasks {
                     if (response.isSuccess) {
                         listener.onExecuted()
                     } else {
-                        listener.onFailed(response.extras.resultCodes.operationsResultCodes[0].toString())
+                        val resultCodes = response.extras.resultCodes.operationsResultCodes
+                        if (resultCodes != null && resultCodes.size > 0) {
+                            listener.onFailed(response.extras.resultCodes.operationsResultCodes[0].toString())
+                        } else {
+                            listener.onFailed(response.toString())
+                        }
                     }
                 }
             } catch (error : java.lang.Exception) {
@@ -79,14 +100,110 @@ object Horizon : HorizonTasks {
         }
     }
 
+    override fun registerForEffects(cursor: String, listener: EventListener<EffectResponse>) : SSEStream<EffectResponse>? {
+        val server = getServer()
+        val sourceKeyPair = KeyPair.fromAccountId(WalletApplication.wallet.getStellarAccountId())
+        try {
+            //ATTENTION STREAM must work with order.ASC!
+            return server.effects()
+                    .cursor(cursor)
+                    .order(RequestBuilder.Order.ASC)
+                    .forAccount(sourceKeyPair.accountId).stream(listener)
+        } catch (error : Exception) {
+            Timber.e(error.message.toString())
+        }
+        return null
+    }
+
+    override fun getCreateMarketOffer(listener: OnMarketOfferListener, secretSeed: CharArray, sellingAsset: Asset, buyingAsset: Asset, amount: String, price: String) {
+        AsyncTask.execute {
+            val server = getServer()
+            val managedOfferOperation = ManageSellOfferOperation.Builder(sellingAsset, buyingAsset, amount, price).build()
+            val sourceKeyPair = KeyPair.fromSecretSeed(secretSeed)
+            val sourceAccount = server.accounts().account(sourceKeyPair.accountId)
+
+            val transaction = Transaction.Builder(sourceAccount, getServerNetwork()).setTimeout(TIMEOUT_INFINITE).addOperation(managedOfferOperation).build()
+            transaction.sign(sourceKeyPair)
+            val response = server.submitTransaction(transaction)
+            Handler(Looper.getMainLooper()).post {
+                if (response.isSuccess) {
+                    listener.onExecuted()
+                } else {
+                    val list = response.extras.resultCodes.operationsResultCodes
+                    if (list != null && !list.isEmpty()) {
+                        listener.onFailed(list[0].toString())
+                    }
+                }
+            }
+        }
+    }
+
+    override fun getOrderBook(listener: OnOrderBookListener, buyingAsset: DataAsset, sellingAsset: DataAsset) {
+        AsyncTask.execute {
+            val server = getServer()
+            val buying : Asset = AssetUtil.toAssetFrom(buyingAsset)
+            val selling : Asset = AssetUtil.toAssetFrom(sellingAsset)
+
+            try {
+                val response = server.orderBook().buyingAsset(buying).sellingAsset(selling).execute()
+                Handler(Looper.getMainLooper()).post {
+                    listener.onOrderBook(response.asks, response.bids)
+                }
+            } catch(error : java.lang.Exception ) {
+                error.message?.let {
+                    listener.onFailed(it)
+                } ?: run {
+                    listener.onFailed("fail to get the order book")
+                }
+
+            }
+        }
+    }
+
+    override fun getOffers(listener: OnOffersListener) {
+        LoadOffersTask(listener).execute()
+    }
+
+    private class LoadOffersTask(private val listener: OnOffersListener) : AsyncTask<Void, Void, ArrayList<OfferResponse>>() {
+        var errorMessage : String = "failed to fetch the offers"
+        override fun doInBackground(vararg params: Void?): ArrayList<OfferResponse>? {
+            var list : ArrayList<OfferResponse>? = null
+            val server = getServer()
+            try {
+                val sourceKeyPair = KeyPair.fromAccountId(WalletApplication.wallet.getStellarAccountId())
+                val response = server.offers().forAccount(sourceKeyPair.accountId).execute()
+                if(response != null) {
+                    list = response.records
+                }
+            } catch (error : java.lang.Exception ) {
+                Timber.d(error)
+                error.message?.let{
+                    errorMessage = it
+                }
+
+            }
+            return list
+        }
+
+        override fun onPostExecute(result: ArrayList<OfferResponse>?) {
+            result?.let {
+                listener.onOffers(it)
+            }?:run {
+                listener.onFailed(errorMessage)
+            }
+        }
+
+    }
 
     private class LoadAccountTask(private val listener: OnLoadAccount) : AsyncTask<Void, Void, AccountResponse>() {
         override fun doInBackground(vararg params: Void?) : AccountResponse? {
             val server = getServer()
+            //this is a hack to make tests to pass
+            if(WalletApplication.wallet.getStellarAccountId() == null) return null
             val sourceKeyPair = KeyPair.fromAccountId(WalletApplication.wallet.getStellarAccountId())
             var account : AccountResponse? = null
             try {
-                account = server.accounts().account(sourceKeyPair)
+                account = server.accounts().account(sourceKeyPair.accountId)
 
             } catch (error : Exception) {
                 Timber.d(error.message.toString())
@@ -105,24 +222,34 @@ object Horizon : HorizonTasks {
         }
     }
 
-    private class LoadEffectsTask(private val listener: OnLoadEffects) : AsyncTask<Void, Void, ArrayList<EffectResponse>?>() {
+
+    private class LoadEffectsTask(val cursor : String, val limit:Int, private val listener: OnLoadEffects) : AsyncTask<Void, Void, ArrayList<EffectResponse>?>() {
+        var errorMessage : String? = null
         override fun doInBackground(vararg params: Void?): ArrayList<EffectResponse>? {
             val server = getServer()
             val sourceKeyPair = KeyPair.fromAccountId(WalletApplication.wallet.getStellarAccountId())
             var effectResults : Page<EffectResponse>? = null
             try {
                 effectResults = server.effects().order(RequestBuilder.Order.DESC)
-                        .limit(Constants.NUM_TRANSACTIONS_SHOWN)
-                        .forAccount(sourceKeyPair).execute()
+                        .cursor(cursor)
+                        .limit(limit)
+                        .forAccount(sourceKeyPair.accountId).execute()
             } catch (error : Exception) {
                 Timber.e(error.message.toString())
+                errorMessage = error.message.toString()
             }
 
-            return effectResults?.records
+            val list = effectResults?.records
+            list?.asReversed()
+            return list
         }
 
         override fun onPostExecute(result: ArrayList<EffectResponse>?) {
-            listener.onLoadEffects(result)
+            errorMessage?.let {
+                listener.onError(it)
+             }?: run {
+                listener.onLoadEffects(result)
+            }
         }
 
     }
@@ -137,11 +264,9 @@ object Horizon : HorizonTasks {
             val destKeyPair = KeyPair.fromAccountId(destAddress)
             var isCreateAccount = false
 
-            Network.usePublicNetwork()
-
             try {
                 try {
-                    server.accounts().account(destKeyPair)
+                    server.accounts().account(destKeyPair.accountId)
                 } catch (error : Exception) {
                     Timber.e(error.message.toString())
                     if (error is ErrorResponse && error.code == 404) {
@@ -153,13 +278,13 @@ object Horizon : HorizonTasks {
                     }
                 }
 
-                val sourceAccount = server.accounts().account(sourceKeyPair)
+                val sourceAccount = server.accounts().account(sourceKeyPair.accountId)
 
-                val transactionBuilder = Transaction.Builder(sourceAccount)
+                val transactionBuilder = Transaction.Builder(sourceAccount, getServerNetwork()).setTimeout(TIMEOUT_INFINITE)
                 if (isCreateAccount) {
-                    transactionBuilder.addOperation(CreateAccountOperation.Builder(destKeyPair, amount).build())
+                    transactionBuilder.addOperation(CreateAccountOperation.Builder(destKeyPair.accountId, amount).build())
                 } else {
-                    transactionBuilder.addOperation(PaymentOperation.Builder(destKeyPair, getCurrentAsset(), amount).build())
+                    transactionBuilder.addOperation(PaymentOperation.Builder(destKeyPair.accountId, getCurrentAsset(), amount).build())
                 }
 
                 if (memo.isNotEmpty()) {
@@ -199,18 +324,17 @@ object Horizon : HorizonTasks {
         : AsyncTask<Void, Void, HorizonException>() {
 
         override fun doInBackground(vararg params: Void?): HorizonException? {
-            Network.usePublicNetwork()
 
             val server = getServer()
             val sourceKeyPair = KeyPair.fromSecretSeed(secretSeed)
             val destKeyPair = KeyPair.fromAccountId(inflationDest)
 
             try {
-                val sourceAccount = server.accounts().account(sourceKeyPair)
+                val sourceAccount = server.accounts().account(sourceKeyPair.accountId)
 
-                val transaction = Transaction.Builder(sourceAccount)
+                val transaction = Transaction.Builder(sourceAccount, getServerNetwork()).setTimeout(TIMEOUT_INFINITE)
                         .addOperation(SetOptionsOperation.Builder()
-                                .setInflationDestination(destKeyPair)
+                                .setInflationDestination(destKeyPair.accountId)
                                 .build())
                         .build()
 
@@ -246,16 +370,15 @@ object Horizon : HorizonTasks {
         : AsyncTask<Void, Void, HorizonException?>() {
 
         override fun doInBackground(vararg params: Void?): HorizonException? {
-            Network.usePublicNetwork()
 
             val server = getServer()
             val sourceKeyPair = KeyPair.fromSecretSeed(secretSeed)
             val limit = if (removeTrust) "0.0000000" else Constants.MAX_ASSET_STRING_VALUE
 
             try {
-                val sourceAccount = server.accounts().account(sourceKeyPair)
+                val sourceAccount = server.accounts().account(sourceKeyPair.accountId)
 
-                val transaction = Transaction.Builder(sourceAccount)
+                val transaction = Transaction.Builder(sourceAccount, getServerNetwork()).setTimeout(TIMEOUT_INFINITE)
                         .addOperation(ChangeTrustOperation.Builder(asset, limit).build())
                         .build()
 
@@ -301,91 +424,44 @@ object Horizon : HorizonTasks {
         fun onFailed(errorMessage: String)
     }
 
-    override fun getCreateMarketOffer(listener: OnMarketOfferListener, secretSeed: CharArray, sellingAsset: Asset, buyingAsset: Asset, amount: String, price: String) {
-        AsyncTask.execute {
-            Network.usePublicNetwork()
-
-            val server = getServer()
-            val managedOfferOperation = ManageOfferOperation.Builder(sellingAsset, buyingAsset, amount, price).build()
-            val sourceKeyPair = KeyPair.fromSecretSeed(secretSeed)
-            val sourceAccount = server.accounts().account(sourceKeyPair)
-
-            val transaction = Transaction.Builder(sourceAccount).addOperation(managedOfferOperation).build()
-            transaction.sign(sourceKeyPair)
-            val response = server.submitTransaction(transaction)
-            Handler(Looper.getMainLooper()).post {
-                if (response.isSuccess) {
-                    listener.onExecuted()
-                } else {
-                    listener.onFailed(response.extras.resultCodes.operationsResultCodes[0].toString())
-                }
-            }
-        }
-    }
-
-    override fun getOrderBook(listener: OnOrderBookListener, buyingAsset: DataAsset, sellingAsset: DataAsset) {
-        AsyncTask.execute {
-            Network.usePublicNetwork()
-
-            val server = getServer()
-            val buying : Asset = AssetUtil.toAssetFrom(buyingAsset)
-            val selling : Asset = AssetUtil.toAssetFrom(sellingAsset)
-
-            val response = server.orderBook().buyingAsset(buying).sellingAsset(selling).execute()
-
-            Handler(Looper.getMainLooper()).post {
-                listener.onOrderBook(response.asks, response.bids)
-            }
-        }
-    }
-
-    override fun getOffers(listener: OnOffersListener) {
-        AsyncTask.execute {
-            Network.usePublicNetwork()
-
-            val server = getServer()
-            try {
-                val sourceKeyPair = KeyPair.fromAccountId(WalletApplication.wallet.getStellarAccountId())
-                val response = server.offers().forAccount(sourceKeyPair).execute()
-                Handler(Looper.getMainLooper()).post {
-                    listener.onOffers(response.records)
-                }
-            } catch (error : ErrorResponse ) {
-                Handler(Looper.getMainLooper()).post {
-                    listener.onFailed(error.message!!)
-                }
-            }
-        }
-    }
-
-
     private fun getCurrentAsset(): Asset {
-        val assetCode = WalletApplication.userSession.currAssetCode
-        val assetIssuer = WalletApplication.userSession.currAssetIssuer
+        val assetCode = WalletApplication.userSession.getSessionAsset().assetCode
+        val assetIssuer = WalletApplication.userSession.getSessionAsset().assetIssuer
 
         return if (assetCode == Constants.LUMENS_ASSET_TYPE) {
             AssetTypeNative()
         } else {
-            Asset.createNonNativeAsset(assetCode, KeyPair.fromAccountId(assetIssuer))
+            Asset.createNonNativeAsset(assetCode, KeyPair.fromAccountId(assetIssuer).accountId)
         }
     }
 
+    /**
+     * HORIZON_SUBMIT_TIMEOUT is a time in seconds after Horizon sends a timeout response
+     * after internal txsub timeout.
+     */
+    private const val HORIZON_SUBMIT_TIMEOUT = 60L
+
     private fun getServer() : Server {
-        val server = Server(PROD_SERVER)
-        // These two clients are a copy of the liens 45 and 46 of org.stellar.sdk.Server class with the stetho interceptor
+        checkNotNull(HORIZON_SERVER, lazyMessage = {"Horizon server has not been initialized, please call {${this::class.java}#init(..)" })
+        return HORIZON_SERVER
+    }
+
+    private fun createServer(serverAddress : String) : Server {
+        val server = Server(serverAddress)
+        // These two clients are a copy of the lines 32 and 42 of org.stellar.sdk.Server class with the stetho interceptor
         // REVIEW this once you upgrade stellar library
         val httpClient = OkHttpClient.Builder()
-                .connectTimeout(10L, TimeUnit.SECONDS)
-                .readTimeout(30L, TimeUnit.SECONDS)
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
-                .addNetworkInterceptor(StethoInterceptor())
+                .addNetworkInterceptor(ShadowedStethoInterceptor())
                 .build()
 
         val submitHttpClient = OkHttpClient.Builder()
-                .connectTimeout(10L, TimeUnit.SECONDS)
-                .readTimeout(65L, TimeUnit.SECONDS)
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(HORIZON_SUBMIT_TIMEOUT + 5, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
-                .addNetworkInterceptor(StethoInterceptor())
+                .addNetworkInterceptor(ShadowedStethoInterceptor())
                 .build()
 
         server.httpClient = httpClient

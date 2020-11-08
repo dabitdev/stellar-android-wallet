@@ -26,7 +26,8 @@ import timber.log.Timber
 import android.net.Uri
 import android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS
 import com.blockeq.stellarwallet.R
-
+import java.util.*
+import kotlin.collections.ArrayList
 
 /**
  * Fragment that holds the RecyclerView
@@ -44,7 +45,7 @@ class ContactsFragment : Fragment() {
     private lateinit var searchButton : MenuItem
     private lateinit var refreshButton : MenuItem
     private lateinit var addContactButton : MenuItem
-
+    private var menuItemsInitialized = false
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setHasOptionsMenu(true)
@@ -68,7 +69,7 @@ class ContactsFragment : Fragment() {
         checkRationale()
         requestContacts()
 
-        //This logic around clearbutton is hack to fix #191, it should be removed if the bug is approved fix and relesaead.
+        // This logic around mt_clear button is hack to fix #191, it should be removed if the bug is approved fix and released.
         // https://github.com/mancj/MaterialSearchBar/issues/104
         val clearButton = searchBar.findViewById<View>(R.id.mt_clear)
         clearButton.visibility = View.GONE
@@ -90,8 +91,8 @@ class ContactsFragment : Fragment() {
         refreshButton = menu.findItem(R.id.refresh_contacts)
         searchButton = menu.findItem(R.id.search_contacts)
         addContactButton = menu.findItem(R.id.add_contact)
-
         setMenuItemsEnable(false)
+        menuItemsInitialized = true
         super.onCreateOptionsMenu(menu, inflater)
     }
 
@@ -132,7 +133,7 @@ class ContactsFragment : Fragment() {
         empty_view.visibility = View.GONE
         progress_view.visibility = View.GONE
         enable_permissions.visibility = View.VISIBLE
-        allow_permissions_button.setOnClickListener { it ->
+        allow_permissions_button.setOnClickListener {
             if (shouldShowRationale) {
                 requestContacts()
             } else {
@@ -140,7 +141,7 @@ class ContactsFragment : Fragment() {
                 builder.setTitle("Contact Permission Needed")
                 builder.setMessage("Open Settings, then tap Permissions and turn on Contacts.")
                 builder.setPositiveButton("Open Settings") { _, _ ->
-                    context?.let {that ->
+                    context?.let {
                         val intent = getAppSettingsIntent(appContext.packageName)
                         startActivity(intent)
                     }
@@ -151,9 +152,11 @@ class ContactsFragment : Fragment() {
     }
 
     private fun setMenuItemsEnable(isEnabled : Boolean) {
-        refreshButton.isEnabled = isEnabled
-        searchButton.isEnabled = isEnabled
-        addContactButton.isEnabled = isEnabled
+        if (menuItemsInitialized) {
+            refreshButton.isEnabled = isEnabled
+            searchButton.isEnabled = isEnabled
+            addContactButton.isEnabled = isEnabled
+        }
     }
 
     private fun setInitialStateContacts() {
@@ -217,7 +220,7 @@ class ContactsFragment : Fragment() {
         val filterList : ArrayList<Contact> = ArrayList()
         currentContactList.forEach {
             it.name.let { name ->
-                if (name.toLowerCase().contains(input.toLowerCase())) {
+                if (name.toLowerCase(Locale.getDefault()).contains(input.toLowerCase(Locale.getDefault()))) {
                     filterList.add(it)
                 }
             }

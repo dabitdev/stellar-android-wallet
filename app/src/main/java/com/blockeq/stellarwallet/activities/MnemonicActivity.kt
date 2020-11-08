@@ -10,6 +10,7 @@ import com.blockeq.stellarwallet.R
 import com.blockeq.stellarwallet.WalletApplication
 import com.blockeq.stellarwallet.helpers.PassphraseDialogHelper
 import com.blockeq.stellarwallet.models.MnemonicType
+import com.blockeq.stellarwallet.utils.GlobalGraphHelper
 import com.google.zxing.BarcodeFormat
 import com.journeyapps.barcodescanner.BarcodeEncoder
 import com.soneso.stellarmnemonics.Wallet
@@ -20,6 +21,8 @@ class MnemonicActivity : BaseActivity(), View.OnClickListener {
 
     companion object {
         private const val MNEMONIC_PHRASE = "MNEMONIC_PHRASE"
+        private const val PASS_PHRASE = "PASS_PHRASE"
+
         private const val WALLET_LENGTH = "WALLET_LENGTH"
 
         fun newCreateMnemonicIntent(context: Context, type : MnemonicType): Intent {
@@ -28,15 +31,17 @@ class MnemonicActivity : BaseActivity(), View.OnClickListener {
             return intent
         }
 
-        fun newDisplayMnemonicIntent(context: Context, mnemonic: String): Intent {
+        fun newDisplayMnemonicIntent(context: Context, mnemonic: String, passphrase : String?): Intent {
             val intent = Intent(context, MnemonicActivity::class.java)
             intent.putExtra(MnemonicActivity.MNEMONIC_PHRASE, mnemonic)
+            intent.putExtra(MnemonicActivity.PASS_PHRASE, passphrase)
             return intent
         }
     }
 
     private var mnemonicString : String = String()
-    private var passphrase : String = String()
+    private var passphraseToCreate : String = String()
+    private var passphraseToDisplay : String? = null
     private var walletLength : MnemonicType = MnemonicType.WORD_12
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,7 +57,7 @@ class MnemonicActivity : BaseActivity(), View.OnClickListener {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == CREATE_WALLET_REQUEST) {
             if (resultCode == Activity.RESULT_OK) {
-                launchWallet()
+                GlobalGraphHelper.launchWallet(this)
             }
         }
     }
@@ -61,11 +66,11 @@ class MnemonicActivity : BaseActivity(), View.OnClickListener {
     override fun onClick(v: View) {
         val itemId = v.id
         when (itemId) {
-            R.id.confirmButton -> startActivityForResult(WalletManagerActivity.createWallet(v.context, mnemonicString, passphrase), CREATE_WALLET_REQUEST)
+            R.id.confirmButton -> startActivityForResult(WalletManagerActivity.createWallet(v.context, mnemonicString, passphraseToCreate), CREATE_WALLET_REQUEST)
             R.id.passphraseButton -> {
                 val builder = PassphraseDialogHelper(this, object: PassphraseDialogHelper.PassphraseDialogListener {
                     override fun onOK(phrase: String) {
-                        passphrase = phrase
+                        passphraseToCreate = phrase
                         passphraseButton.text = getString(R.string.passphrase_applied)
                     }
                 })
@@ -76,7 +81,7 @@ class MnemonicActivity : BaseActivity(), View.OnClickListener {
 
     private fun setupUI() {
         if (!mnemonicString.isEmpty()) {
-            // Show mnemonic UI
+            // Show chips UI
             confirmButton.visibility = View.GONE
             passphraseButton.visibility = View.GONE
             generateQRCode(mnemonicString, qrImageView, 500)
@@ -86,7 +91,7 @@ class MnemonicActivity : BaseActivity(), View.OnClickListener {
                 mnemonicView.visibility = View.GONE
             }
         } else {
-            // Create mnemonic UI
+            // Create chips UI
             qrLayout.visibility = View.GONE
 
             // TODO: Problem linked to setting isRecoveryPhrase before it is confirmed in
@@ -105,8 +110,10 @@ class MnemonicActivity : BaseActivity(), View.OnClickListener {
     }
 
     private fun setupMnemonicView() {
-        mnemonicView.mnemonic = getMnemonic()
-        mnemonicView.loadMnemonic()
+        mnemonicView.loadChips(getMnemonic())
+        passphraseToDisplay?.let {
+            passphraseView.loadChips(arrayListOf(it), arrayListOf("passPhrase"))
+        }
     }
 
     //endregion
@@ -143,6 +150,10 @@ class MnemonicActivity : BaseActivity(), View.OnClickListener {
 
         if (intent.hasExtra(WALLET_LENGTH)) {
             walletLength = intent.getSerializableExtra(WALLET_LENGTH) as MnemonicType
+        }
+
+        if (intent.hasExtra(PASS_PHRASE)) {
+           passphraseToDisplay = intent.getStringExtra(PASS_PHRASE)
         }
     }
 

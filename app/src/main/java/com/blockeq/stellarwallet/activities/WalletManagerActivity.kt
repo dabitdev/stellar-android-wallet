@@ -9,6 +9,7 @@ import com.blockeq.stellarwallet.R
 import com.blockeq.stellarwallet.WalletApplication
 import com.blockeq.stellarwallet.encryption.KeyStoreWrapper
 import com.blockeq.stellarwallet.utils.AccountUtils
+import com.blockeq.stellarwallet.utils.GlobalGraphHelper
 import java.lang.IllegalStateException
 
 class WalletManagerActivity : AppCompatActivity() {
@@ -17,7 +18,7 @@ class WalletManagerActivity : AppCompatActivity() {
         RESTORE_WALLET,
         VERIFY_PIN,
         DECRYPT_SECRET_SEED,
-        DECRYPT_MNEMONIC,
+        DISPLAY_MNEMONIC,
         /**
          * These are interim action types used in the actions NEW_WALLET & RESTORE_WALLET
          */
@@ -33,6 +34,7 @@ class WalletManagerActivity : AppCompatActivity() {
         private const val INTENT_PASSPHRASE: String = "INTENT_PASSPHRASE"
 
         private const val INTENT_RESULT_DATA: String = "INTENT_RESULT_DATA"
+        private const val INTENT_RESULT_EXTRA_DATA: String = "INTENT_RESULT_EXTRA_DATA"
 
         fun restore(context: Context, recoveryString: String, passphrase: String?): Intent {
           return createWallet(context, recoveryString, passphrase)
@@ -62,13 +64,18 @@ class WalletManagerActivity : AppCompatActivity() {
 
         fun showMnemonic(context: Context) : Intent {
             val intent = Intent(context, WalletManagerActivity::class.java)
-            intent.putExtra(INTENT_ARG_TYPE, ActionType.DECRYPT_MNEMONIC)
+            intent.putExtra(INTENT_ARG_TYPE, ActionType.DISPLAY_MNEMONIC)
             return intent
         }
 
         fun getResultDataString(intent:Intent?) : String? {
             if (intent == null) return null
             return intent.getStringExtra(INTENT_RESULT_DATA)
+        }
+
+        fun getResultExtraDataString(intent:Intent?) : String? {
+            if (intent == null) return null
+            return intent.getStringExtra(INTENT_RESULT_EXTRA_DATA)
         }
     }
 
@@ -85,8 +92,8 @@ class WalletManagerActivity : AppCompatActivity() {
             ActionType.NEW_WALLET -> {
                 startActivityForResult(PinActivity.newInstance(this, null, getString(R.string.please_create_a_pin)), ActionType.ENTER_PIN.ordinal)
             }
-            ActionType.DECRYPT_MNEMONIC -> {
-                startActivityForResult(PinActivity.newInstance(this, getPinFromKeyStore(), getString(R.string.please_enter_your_pin)), ActionType.DECRYPT_MNEMONIC.ordinal)
+            ActionType.DISPLAY_MNEMONIC -> {
+                startActivityForResult(PinActivity.newInstance(this, getPinFromKeyStore(), getString(R.string.please_enter_your_pin)), ActionType.DISPLAY_MNEMONIC.ordinal)
             }
             ActionType.DECRYPT_SECRET_SEED -> {
                 startActivityForResult(PinActivity.newInstance(this, getPinFromKeyStore(), getString(R.string.please_enter_your_pin)), ActionType.DECRYPT_SECRET_SEED.ordinal)
@@ -101,81 +108,94 @@ class WalletManagerActivity : AppCompatActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        when (requestCode) {
-            ActionType.ENTER_PIN.ordinal -> {
-                if (resultCode == Activity.RESULT_OK && data != null) {
-                    val pin = PinActivity.getPinFromIntent(data)
-                    startActivityForResult(PinActivity.newInstance(this, pin, getString(R.string.please_reenter_your_pin)), ActionType.REENTER_PIN.ordinal)
-                    return
-                }
-            }
-            ActionType.REENTER_PIN.ordinal -> {
-                if (resultCode == Activity.RESULT_OK) {
-                    if (actionType == ActionType.NEW_WALLET || actionType ==  ActionType.RESTORE_WALLET) {
-                        val phrase = intent.getStringExtra(INTENT_PHRASE)
-                        if (generateWallet(data, phrase)) {
-                            setResult(Activity.RESULT_OK)
-                            finish()
-                            return
-                        }
+        if (resultCode == PinActivity.RESULT_MAX_ATTEMPT_REACH) {
+            GlobalGraphHelper.wipeAndRestart(this)
+        } else {
+            when (requestCode) {
+                ActionType.ENTER_PIN.ordinal -> {
+                    if (resultCode == Activity.RESULT_OK && data != null) {
+                        val pin = PinActivity.getPinFromIntent(data)
+                        startActivityForResult(PinActivity.newInstance(this, pin, getString(R.string.please_reenter_your_pin)), ActionType.REENTER_PIN.ordinal)
+                        return
                     }
                 }
-            }
-            ActionType.VERIFY_PIN.ordinal -> {
-                if (resultCode == Activity.RESULT_OK && data != null) {
-                    val pin = PinActivity.getPinFromIntent(data)
-                    WalletApplication.userSession.pin = pin
-                    setResult(Activity.RESULT_OK)
-                    finish()
-                    return
-                }
-            }
-            ActionType.DECRYPT_MNEMONIC.ordinal -> {
-                if (resultCode == Activity.RESULT_OK && data != null) {
-                    val pin = PinActivity.getPinFromIntent(data)
-                    if (pin != null) {
-                        val masterKey = AccountUtils.getPinMasterKey(applicationContext, pin)
-                        if (masterKey != null) {
-                            val encryptedPhrase = WalletApplication.wallet.getEncryptedPhrase()!!
-                            val decryptedPhrase = AccountUtils.getDecryptedString(encryptedPhrase, masterKey)
-                            setResultData(decryptedPhrase)
-                            return
-                        }
-                    }
-                }
-            }
-            ActionType.DECRYPT_SECRET_SEED.ordinal -> {
-                if (resultCode == Activity.RESULT_OK && data != null) {
-                    val pin = PinActivity.getPinFromIntent(data)
-                    if (pin != null) {
-                        val masterKey = AccountUtils.getPinMasterKey(applicationContext, pin)
-                        if (masterKey != null) {
-                            val encryptedPhrase = WalletApplication.wallet.getEncryptedPhrase()!!
-                            val phrase = AccountUtils.getDecryptedString(encryptedPhrase, masterKey)
-
-                            val encryptedPassphrase = WalletApplication.wallet.getEncryptedPassphrase()
-                            var passphrase: String?= null
-                            if (encryptedPassphrase != null) {
-                                passphrase = AccountUtils.getDecryptedString(encryptedPassphrase, masterKey)
+                ActionType.REENTER_PIN.ordinal -> {
+                    if (resultCode == Activity.RESULT_OK) {
+                        if (actionType == ActionType.NEW_WALLET || actionType ==  ActionType.RESTORE_WALLET) {
+                            val phrase = intent.getStringExtra(INTENT_PHRASE)
+                            if (generateWallet(data, phrase)) {
+                                setResult(Activity.RESULT_OK)
+                                finish()
+                                return
                             }
-                            val keyPair = AccountUtils.getStellarKeyPair(phrase, passphrase)
-                            val secretSeed = keyPair.secretSeed.joinToString("")
+                        }
+                    }
+                }
+                ActionType.VERIFY_PIN.ordinal -> {
+                    val pin = PinActivity.getPinFromIntent(data)
+                    if (resultCode == Activity.RESULT_OK && data != null && pin != null) {
+                        WalletApplication.userSession.setPin(pin)
+                        setResult(Activity.RESULT_OK)
+                        finish()
+                        return
+                    }
+                }
+                ActionType.DISPLAY_MNEMONIC.ordinal -> {
+                    if (resultCode == Activity.RESULT_OK && data != null) {
+                        val pin = PinActivity.getPinFromIntent(data)
+                        if (pin != null) {
+                            val masterKey = AccountUtils.getPinMasterKey(applicationContext, pin)
+                            if (masterKey != null) {
+                                val encryptedPhrase = WalletApplication.wallet.getEncryptedPhrase()!!
+                                WalletApplication.wallet.getEncryptedPassphrase()
+                                val encryptedPassphrase = WalletApplication.wallet.getEncryptedPassphrase()
+                                var passphrase: String?= null
+                                if (encryptedPassphrase != null) {
+                                    passphrase = AccountUtils.getDecryptedString(encryptedPassphrase, masterKey)
+                                }
+                                val decryptedPhrase = AccountUtils.getDecryptedString(encryptedPhrase, masterKey)
+                                setResultData(decryptedPhrase, passphrase)
+                                return
+                            }
+                        }
+                    }
+                }
+                ActionType.DECRYPT_SECRET_SEED.ordinal -> {
+                    if (resultCode == Activity.RESULT_OK && data != null) {
+                        val pin = PinActivity.getPinFromIntent(data)
+                        if (pin != null) {
+                            val masterKey = AccountUtils.getPinMasterKey(applicationContext, pin)
+                            if (masterKey != null) {
+                                val encryptedPhrase = WalletApplication.wallet.getEncryptedPhrase()!!
+                                val phrase = AccountUtils.getDecryptedString(encryptedPhrase, masterKey)
 
-                            setResultData(secretSeed)
-                            return
+                                val encryptedPassphrase = WalletApplication.wallet.getEncryptedPassphrase()
+                                var passphrase: String?= null
+                                if (encryptedPassphrase != null) {
+                                    passphrase = AccountUtils.getDecryptedString(encryptedPassphrase, masterKey)
+                                }
+                                val keyPair = AccountUtils.getStellarKeyPair(phrase, passphrase)
+                                val secretSeed = keyPair.secretSeed.joinToString("")
+
+                                setResultData(secretSeed)
+                                return
+                            }
                         }
                     }
                 }
             }
-        }
 
-        setResult(Activity.RESULT_CANCELED)
-        finish()
+            setResult(Activity.RESULT_CANCELED)
+            finish()
+        }
     }
 
-    private fun setResultData(resultData : String) {
+    private fun setResultData(resultData : String, resultExtraData : String? = null) {
         val intent = Intent()
         intent.putExtra(INTENT_RESULT_DATA, resultData)
+        if (resultExtraData != null) {
+           intent.putExtra(INTENT_RESULT_EXTRA_DATA, resultExtraData)
+        }
         setResult(Activity.RESULT_OK, intent)
         finish()
     }

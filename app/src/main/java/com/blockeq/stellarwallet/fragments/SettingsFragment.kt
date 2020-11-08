@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.support.v4.app.FragmentActivity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -12,8 +13,8 @@ import com.blockeq.stellarwallet.BuildConfig
 import com.blockeq.stellarwallet.R
 import com.blockeq.stellarwallet.WalletApplication
 import com.blockeq.stellarwallet.activities.*
-import com.blockeq.stellarwallet.utils.AccountUtils
 import com.blockeq.stellarwallet.utils.DiagnosticUtils
+import com.blockeq.stellarwallet.utils.GlobalGraphHelper
 import kotlinx.android.synthetic.main.fragment_settings.*
 import timber.log.Timber
 
@@ -57,24 +58,20 @@ class SettingsFragment : BaseFragment() {
             startActivityForResult(WalletManagerActivity.verifyPin(it.context), SettingsAction.CLEAR_WALLET.ordinal)
         }
 
-        enableWear.setOnClickListener {
-            startActivityForResult(WalletManagerActivity.verifyPin(it.context), SettingsAction.TOGGLE_ENABLE_WEAR_APP.ordinal)
-        }
-
         pinOnSendPaymentsButton.setOnClickListener {
             startActivityForResult(WalletManagerActivity.verifyPin(it.context), SettingsAction.TOGGLE_PIN_ON_SENDING.ordinal)
         }
 
         diagnosticButton.setOnClickListener {
-            startActivity(Intent(appContext, DiagnosticActivity::class.java))
+            startActivity(Intent(it.context, DiagnosticActivity::class.java))
         }
 
         privacyPolicyButton.setOnClickListener {
-            startActivity(WebViewActivity.newIntent(appContext, getString(R.string.privacy_policy),"https://www.blockeq.com/privacy.html"))
+            startActivity(WebViewActivity.newIntent(it.context, getString(R.string.privacy_policy),"https://www.blockeq.com/privacy.html"))
         }
 
         termsOfServiceButton.setOnClickListener {
-            startActivity(WebViewActivity.newIntent(appContext, getString(R.string.terms_of_service), "https://www.blockeq.com/terms.html"))
+            startActivity(WebViewActivity.newIntent(it.context, getString(R.string.terms_of_service), "https://www.blockeq.com/terms.html"))
         }
 
         if (BuildConfig.DEBUG) {
@@ -109,7 +106,8 @@ class SettingsFragment : BaseFragment() {
                     context?.let {
                         val mnemonic = WalletManagerActivity.getResultDataString(data)
                         if (mnemonic != null) {
-                            startActivity(MnemonicActivity.newDisplayMnemonicIntent(it, mnemonic))
+                            val phrase = WalletManagerActivity.getResultExtraDataString(data)
+                            startActivity(MnemonicActivity.newDisplayMnemonicIntent(it, mnemonic, phrase))
                         } else {
                             Timber.e("fatal error: mnemonic is null")
                         }
@@ -124,16 +122,15 @@ class SettingsFragment : BaseFragment() {
                         if (decryptedPhrase != null) {
                             startActivity(ViewSecretSeedActivity.newInstance(it, decryptedPhrase))
                         } else {
-                            Timber.e("fatal error: decryptedphrase is null")
+                            Timber.e("fatal error: decrypted phrase is null")
                         }
                     }
                 }
             }
 
-
             SettingsAction.CLEAR_WALLET.ordinal -> {
                 if (resultCode == Activity.RESULT_OK) {
-                    wipeAndRestart()
+                    GlobalGraphHelper.wipeAndRestart(activity as FragmentActivity)
                 }
             }
 
@@ -152,14 +149,4 @@ class SettingsFragment : BaseFragment() {
     private fun setSavedSettings() {
         pinOnSendPaymentsButton.isChecked = WalletApplication.wallet.getShowPinOnSend()
     }
-
-    private fun wipeAndRestart() {
-        activity?.let {
-            AccountUtils.wipe(appContext)
-            val intent = Intent(activity, LaunchActivity::class.java)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-            startActivity(intent)
-        }
-    }
-
 }

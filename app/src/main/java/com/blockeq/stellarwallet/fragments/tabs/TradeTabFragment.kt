@@ -2,8 +2,8 @@ package com.blockeq.stellarwallet.fragments.tabs
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.arch.lifecycle.Observer
 import android.content.Context
-import android.content.DialogInterface
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
@@ -15,59 +15,72 @@ import android.view.*
 import android.widget.*
 import com.blockeq.stellarwallet.R
 import com.blockeq.stellarwallet.WalletApplication
-import com.blockeq.stellarwallet.activities.AssetsActivity
-import com.blockeq.stellarwallet.interfaces.AfterTextChanged
-import com.blockeq.stellarwallet.interfaces.OnItemSelected
-import com.blockeq.stellarwallet.interfaces.OnTradeCurrenciesChanged
-import com.blockeq.stellarwallet.interfaces.OnUpdateTradeTab
+import com.blockeq.stellarwallet.interfaces.*
 import com.blockeq.stellarwallet.models.AssetUtil
 import com.blockeq.stellarwallet.models.Currency
 import com.blockeq.stellarwallet.models.SelectionModel
+import com.blockeq.stellarwallet.mvvm.account.AccountRepository
+import com.blockeq.stellarwallet.mvvm.balance.BalanceRepository
 import com.blockeq.stellarwallet.remote.Horizon
 import com.blockeq.stellarwallet.utils.AccountUtils
 import com.blockeq.stellarwallet.utils.DebugPreferencesHelper
-import kotlinx.android.synthetic.main.design_bottom_sheet_dialog.*
 import kotlinx.android.synthetic.main.fragment_tab_trade.*
 import kotlinx.android.synthetic.main.view_custom_selector.view.*
 import org.stellar.sdk.Asset
 import org.stellar.sdk.responses.OrderBookResponse
 import timber.log.Timber
 import java.text.DecimalFormat
-import java.text.NumberFormat
-
 
 class TradeTabFragment : Fragment(), View.OnClickListener, OnUpdateTradeTab {
-
     private lateinit var appContext : Context
+    private lateinit var parentListener: OnTradeCurrenciesChanged
+    private lateinit var selectedSellingCurrency: SelectionModel
+    private lateinit var selectedBuyingCurrency: SelectionModel
+    private lateinit var toolTip : PopupWindow
 
     private var sellingCurrencies = mutableListOf<SelectionModel>()
     private var buyingCurrencies = mutableListOf<SelectionModel>()
     private var holdingsAmount : Double = 0.0
-    private lateinit var listener: OnTradeCurrenciesChanged
-    private lateinit var selectedSellingCurrency: SelectionModel
-    private lateinit var selectedBuyingCurrency: SelectionModel
     private var addedCurrencies : ArrayList<Currency> = ArrayList()
     private var latestBid: OrderBookResponse.Row? = null
     private var orderType : OrderType = OrderType.MARKET
     private var dataAvailable = false
-    private lateinit var toolTip : PopupWindow
     private var isToolTipShowing = false
     private val ZERO_VALUE = "0.0"
-    private val decimalFormat : NumberFormat = DecimalFormat("0.#######")
+    private val decimalFormat = DecimalFormat("0.#######")
 
+    private var balance : BalanceAvailability? = null
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         return inflater.inflate(R.layout.fragment_tab_trade, container, false)
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        Timber.d("view created")
         appContext = view.context.applicationContext
         toolTip = PopupWindow(view.context)
         setBuyingSelectorEnabled(false)
-        refreshAddedCurrencies()
         setupListeners()
 
-        Timber.d("TradeTabFragment{$this}#onViewCreated")
+        BalanceRepository.loadBalance().observe(this, Observer {
+            if(it != null) {
+                balance = it
+                refreshAddedCurrencies()
+                setupSpinners()
+                Timber.d("new balance")
+                if (::selectedSellingCurrency.isInitialized) {
+                    sellingCurrencies.forEach { selection ->
+                        if (selection.label == selectedSellingCurrency.label) {
+                            refreshBalance(selection.holdings)
+                        }
+                    }
+                    buyingCustomSelector.editText.setText("")
+                    sellingCustomSelector.editText.setText("")
+                    refreshSubmitTradeButton()
+                    updateBuyingValueIfNeeded()
+                }
+            }
+        })
     }
 
     private fun setupListeners() {
@@ -86,27 +99,14 @@ class TradeTabFragment : Fragment(), View.OnClickListener, OnUpdateTradeTab {
                 refreshSubmitTradeButton()
             }
         })
+    }
 
+    private fun setupSpinners() {
         sellingCustomSelector.setSelectionValues(sellingCurrencies)
         sellingCustomSelector.spinner.onItemSelectedListener = object : OnItemSelected() {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 selectedSellingCurrency = sellingCurrencies[position]
-                holdingsAmount = selectedSellingCurrency.holdings
-
-                if (selectedSellingCurrency.label == AssetUtil.NATIVE_ASSET_CODE) {
-                    val available = WalletApplication.wallet.getAvailableBalance().toDouble()
-
-                    holdings.text = String.format(getString(R.string.holdings_amount),
-                            decimalFormat.format(available),
-                            selectedSellingCurrency.label)
-
-                    holdingsAmount = available
-
-                } else {
-                    holdings.text = String.format(getString(R.string.holdings_amount),
-                            decimalFormat.format(holdingsAmount),
-                            selectedSellingCurrency.label)
-                }
+                refreshBalance(selectedSellingCurrency.holdings)
 
                 resetBuyingCurrencies()
                 buyingCurrencies.removeAt(position)
@@ -124,6 +124,32 @@ class TradeTabFragment : Fragment(), View.OnClickListener, OnUpdateTradeTab {
                 onSelectorChanged()
             }
         }
+    }
+
+    private fun applyNativeFees(amount : Double): Double {
+        // it will reserve double the network fee to be able to cancel the 100% open offer
+        val value = amount -0.5 -0.0002
+        if (value < 0) return 0.00
+        return value
+    }
+
+    private fun refreshBalance(holding: Double) {
+        var availableForTrading = holding
+        if (selectedSellingCurrency.label == "XLM") {
+            availableForTrading = applyNativeFees(holding)
+        }
+
+        var string = String.format(getString(R.string.holdings_amount),
+                decimalFormat.format(availableForTrading),
+                selectedSellingCurrency.label)
+
+        if (selectedSellingCurrency.label == "XLM") {
+            string += " available"
+        }
+
+        holdings.text = string
+
+        holdingsAmount = availableForTrading
     }
 
     private fun onSelectorChanged() {
@@ -182,7 +208,7 @@ class TradeTabFragment : Fragment(), View.OnClickListener, OnUpdateTradeTab {
 
     private fun notifyParent(selling : SelectionModel?, buying : SelectionModel?) {
         if (selling != null && buying != null) {
-            listener.onCurrencyChange(selling, buying)
+            parentListener.onCurrencyChange(selling, buying)
         }
     }
 
@@ -225,11 +251,11 @@ class TradeTabFragment : Fragment(), View.OnClickListener, OnUpdateTradeTab {
             }
             R.id.submitTrade -> {
                 if (buyingCustomSelector.editText.text.toString().isEmpty()) {
-                    createSnackBar("Buying price can not be empty.", Snackbar.LENGTH_SHORT).show()
+                    createSnackBar("Buying price can not be empty.", Snackbar.LENGTH_SHORT)?.show()
                 } else if ((orderType == OrderType.MARKET && !dataAvailable) || buyingCustomSelector.editText.text.toString() == ZERO_VALUE) {
                     // buyingEditText should be empty at this moment
 
-                    createSnackBar("Trade price cannot be 0. Please override limit order.", Snackbar.LENGTH_SHORT).show()
+                    createSnackBar("Trade price cannot be 0. Please override limit order.", Snackbar.LENGTH_SHORT)?.show()
 
                 } else {
 
@@ -256,13 +282,16 @@ class TradeTabFragment : Fragment(), View.OnClickListener, OnUpdateTradeTab {
         }
     }
 
-    private fun createSnackBar(text : CharSequence, duration: Int) : Snackbar {
-        return Snackbar.make(activity!!.findViewById(R.id.content_container), text, duration)
+    private fun createSnackBar(text : CharSequence, duration: Int) : Snackbar? {
+        activity?.let {
+            return Snackbar.make(it.findViewById(R.id.content_container), text, duration)
+        }
+        return null
     }
 
     private fun proceedWithTrade(buyingAmount :String, sellingAmount :String, sellingAsset : Asset, buyingAsset: Asset) {
-        val snackbar =  createSnackBar("Submitting order",  Snackbar.LENGTH_INDEFINITE)
-        val snackView = snackbar.view as Snackbar.SnackbarLayout
+        val snackbar = createSnackBar("Submitting order",  Snackbar.LENGTH_INDEFINITE)
+        val snackView = snackbar?.view as Snackbar.SnackbarLayout
         val progress = ProgressBar(context)
         val height = resources.getDimensionPixelOffset(R.dimen.progress_snackbar_height)
         val width = resources.getDimensionPixelOffset(R.dimen.progress_snackbar_width)
@@ -279,27 +308,30 @@ class TradeTabFragment : Fragment(), View.OnClickListener, OnUpdateTradeTab {
         setBuyingSelectorEnabled(false)
         setSellingSelectorEnabled(false)
 
-        WalletApplication.userSession.getAvailableBalance()
-
         val sellingAmountFormatted = decimalFormat.format(sellingAmount.toDouble())
         val priceFormatted = decimalFormat.format(buyingAmount.toDouble() / sellingAmount.toDouble())
 
         Horizon.getCreateMarketOffer(object: Horizon.OnMarketOfferListener {
             override fun onExecuted() {
                 snackbar.dismiss()
-                createSnackBar("Order executed", Snackbar.LENGTH_SHORT).show()
+                createSnackBar("Order executed", Snackbar.LENGTH_SHORT)?.show()
 
                 submitTrade.isEnabled = true
                 setSellingSelectorEnabled(true)
                 setBuyingSelectorEnabled(true)
+                BalanceRepository.refresh()
+                sellingCustomSelector.editText.setText("0.0")
+                buyingCustomSelector.editText.setText("0.0")
+
             }
 
             override fun onFailed(errorMessage : String) {
                 snackbar.dismiss()
 
-                createSnackBar("Order failed: $errorMessage", Snackbar.LENGTH_SHORT).show()
+                createSnackBar("Order failed: $errorMessage", Snackbar.LENGTH_SHORT)?.show()
 
                 submitTrade.isEnabled = true
+
                 setSellingSelectorEnabled(false)
                 setBuyingSelectorEnabled(false)
             }
@@ -314,7 +346,7 @@ class TradeTabFragment : Fragment(), View.OnClickListener, OnUpdateTradeTab {
 
     private fun setBuyingSelectorEnabled(isEnabled: Boolean) {
         buyingCustomSelector.editText.isEnabled = isEnabled
-        if(isEnabled) {
+        if (isEnabled) {
             buyingCustomSelector.editTextMask.visibility = View.GONE
             buyingCustomSelector.editTextMask.setOnClickListener(null)
         } else {
@@ -331,9 +363,9 @@ class TradeTabFragment : Fragment(), View.OnClickListener, OnUpdateTradeTab {
     override fun onAttach(context: Context?) {
         super.onAttach(context)
         try {
-            listener = parentFragment as OnTradeCurrenciesChanged
+            parentListener = parentFragment as OnTradeCurrenciesChanged
         } catch (e: ClassCastException) {
-            Timber.e("the parent activity must implement: %s", OnTradeCurrenciesChanged::class.java.simpleName)
+            Timber.e("the parent must implement: %s", OnTradeCurrenciesChanged::class.java.simpleName)
         }
     }
 
@@ -345,32 +377,37 @@ class TradeTabFragment : Fragment(), View.OnClickListener, OnUpdateTradeTab {
     }
 
     private fun refreshAddedCurrencies() {
-        val accounts = WalletApplication.wallet.getBalances()
+        if (balance == null) {
+            return
+        }
         addedCurrencies.clear()
         var i = 0
-        var native : Currency? = null
-        accounts.forEach { it ->
-            val currency = if(it.assetType != "native") {
-                Currency(i, it.assetCode, it.assetCode, it.balance.toDouble(), it.asset)
-            } else {
-                native = Currency(i, AssetUtil.NATIVE_ASSET_CODE, "LUMEN", it.balance.toDouble(), it.asset)
-                native as Currency
+        var native: Currency? = null
+        balance?.let {
+            it.getAllBalances().forEach { that ->
+                val currency = if (that.assetCode == "XLM") {
+                    native = Currency(i, AssetUtil.NATIVE_ASSET_CODE, "LUMEN", that.totalAvailable.toDouble(), that.asset)
+                    native as Currency
+                } else {
+                    Currency(i, that.assetCode, that.assetCode, that.totalAvailable.toDouble(), that.asset)
+                }
+                addedCurrencies.add(currency)
+                i++
             }
-            addedCurrencies.add(currency)
-            i++
+
+            native?.let { currency ->
+                addedCurrencies.remove(currency)
+                addedCurrencies.add(0, currency)
+            }
+
+            sellingCurrencies.clear()
+            buyingCurrencies.clear()
+            addedCurrencies.forEach { added ->
+                sellingCurrencies.add(added)
+                buyingCurrencies.add(added)
+            }
         }
 
-        native?.let {
-            addedCurrencies.remove(it)
-            addedCurrencies.add(0, it)
-        }
-
-        sellingCurrencies.clear()
-        buyingCurrencies.clear()
-        addedCurrencies.forEach {
-            sellingCurrencies.add(it)
-            buyingCurrencies.add(it)
-        }
     }
 
     override fun onLastOrderBookUpdated(asks: Array<OrderBookResponse.Row>, bids: Array<OrderBookResponse.Row>) {
@@ -405,5 +442,4 @@ class TradeTabFragment : Fragment(), View.OnClickListener, OnUpdateTradeTab {
             }, 800)
         }
     }
-
 }

@@ -4,16 +4,16 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.support.v7.app.AppCompatActivity
 import android.view.View
 import android.view.animation.Animation
 import android.view.animation.AnimationUtils
 import com.blockeq.stellarwallet.R
 import com.blockeq.stellarwallet.interfaces.OnPinLockCompleteListener
-import com.blockeq.stellarwallet.utils.AccountUtils
 import kotlinx.android.synthetic.main.activity_pin.*
 import timber.log.Timber
 
-class PinActivity : BaseActivity() {
+class PinActivity : AppCompatActivity() {
 
     private var numAttempts = 0
     private val MAX_ATTEMPTS = 3
@@ -23,6 +23,7 @@ class PinActivity : BaseActivity() {
     companion object {
         private const val INTENT_ARG_MESSAGE: String = "INTENT_ARG_MESSAGE"
         private const val INTENT_ARG_PIN: String = "INTENT_ARG_PIN"
+        const val RESULT_MAX_ATTEMPT_REACH = -2
 
         /**
          * New Instance of Intent to launch a {@link PinActivity}
@@ -40,7 +41,7 @@ class PinActivity : BaseActivity() {
                     }
                     intent.putExtra(INTENT_ARG_PIN, pin)
                 } else {
-                    throw IllegalStateException("pin ahs to contain 4 characters, found = '${pin.length}")
+                    throw IllegalStateException("pin has to contain 4 characters, found = '${pin.length}")
                 }
             }
             return intent
@@ -65,8 +66,7 @@ class PinActivity : BaseActivity() {
                     val intent = Intent()
                     intent.putExtra(INTENT_ARG_PIN, pin)
                     setResult(Activity.RESULT_OK, intent)
-                    overridePendingTransition(R.anim.stay, R.anim.slide_out_down)
-                    finish()
+                    finishWithTransition()
                 } else {
                     processIncorrectPin()
                 }
@@ -98,7 +98,8 @@ class PinActivity : BaseActivity() {
                 customMessageTextView.text = resources.getQuantityString(R.plurals.attempts_template,
                         MAX_ATTEMPTS - numAttempts, MAX_ATTEMPTS - numAttempts)
                 if (numAttempts == MAX_ATTEMPTS) {
-                    wipeAndRestart()
+                    setResult(RESULT_MAX_ATTEMPT_REACH)
+                    finishWithTransition()
                 }
             }
         })
@@ -116,11 +117,9 @@ class PinActivity : BaseActivity() {
         overridePendingTransition(R.anim.stay, R.anim.slide_out_down)
     }
 
-    private fun wipeAndRestart() {
-        AccountUtils.wipe(this)
-        val intent = Intent(this, LaunchActivity::class.java)
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        startActivity(intent)
+    private fun finishWithTransition(){
+        overridePendingTransition(R.anim.stay, R.anim.slide_out_down)
+        finish()
     }
     //endregion
 }
